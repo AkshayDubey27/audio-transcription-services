@@ -19,7 +19,8 @@ const TranscriptionForm: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
-const [expanded, setExpanded] = useState<{ [key: string]: boolean }>({});
+  const [success, setSuccess] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<{ [key: string]: boolean }>({});
 
   // MANUAL RETRY SYSTEM
   const [retryCount, setRetryCount] = useState(0);
@@ -33,7 +34,7 @@ const [expanded, setExpanded] = useState<{ [key: string]: boolean }>({});
   const pageSize = 10;
 
   // ---------------------------------
-  // FETCH RECENT WITH RETRY (UNCHANGED)
+  // FETCH RECENT WITH RETRY
   // ---------------------------------
   const fetchRecent = async (retries = 3, delay = 3000) => {
     try {
@@ -48,12 +49,12 @@ const [expanded, setExpanded] = useState<{ [key: string]: boolean }>({});
     }
   };
 
-const toggleExpand = (id: string) => {
-  setExpanded(prev => ({
-    ...prev,
-    [id]: !prev[id]
-  }));
-};
+  const toggleExpand = (id: string) => {
+    setExpanded((prev) => ({
+      ...prev,
+      [id]: !prev[id],
+    }));
+  };
 
   useEffect(() => {
     fetchRecent();
@@ -76,7 +77,7 @@ const toggleExpand = (id: string) => {
     }
 
     const allowed = [".mp3", ".wav", ".ogg", ".m4a"];
-    if (!allowed.some(ext => audioUrl.toLowerCase().endsWith(ext))) {
+    if (!allowed.some((ext) => audioUrl.toLowerCase().endsWith(ext))) {
       setError("Unsupported audio type. Allowed: mp3, wav, ogg, m4a");
       return false;
     }
@@ -91,7 +92,7 @@ const toggleExpand = (id: string) => {
     if (!isBlocked) return;
 
     const timer = setInterval(() => {
-      setBlockTime(prev => {
+      setBlockTime((prev) => {
         if (prev <= 1) {
           clearInterval(timer);
           setIsBlocked(false);
@@ -106,31 +107,52 @@ const toggleExpand = (id: string) => {
   }, [isBlocked]);
 
   // ---------------------------------
-  // NORMAL TRANSCRIPTION WITH MANUAL RETRY
+  // HELPER FUNCTIONS FOR DOWNLOAD
   // ---------------------------------
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (isBlocked) return;
+  const downloadAudio = (url: string) => {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = url.split("/").pop() || "audio";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
+  const downloadText = (text: string, filename = "transcription.txt") => {
+    const blob = new Blob([text], { type: "text/plain" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // ---------------------------------
+  // TRANSCRIPTION SUBMIT FUNCTIONS
+  // ---------------------------------
+  const handleTranscription = async (isAzure = false) => {
+    if (isBlocked) return;
     if (!validateInput()) return;
 
     setLoading(true);
     setProgress(0);
-    const interval = setInterval(() =>
-      setProgress((p) => Math.min(p + 10, 90)), 200);
+    const interval = setInterval(() => setProgress((p) => Math.min(p + 10, 90)), 200);
 
     try {
-      await postTranscription(audioUrl);
+      if (isAzure) {
+        await postAzureTranscription(audioUrl);
+      } else {
+        await postTranscription(audioUrl);
+      }
+
       setRetryCount(0); // reset on success
+      setSuccess(`${isAzure ? "Azure " : ""}Transcription completed successfully!`);
     } catch {
-      setError("Transcription failed.");
-
+      setError(`${isAzure ? "Azure " : ""}Transcription failed.`);
       const newCount = retryCount + 1;
       setRetryCount(newCount);
-
-      if (newCount >= 3) {
-        setIsBlocked(true);
-      }
+      if (newCount >= 3) setIsBlocked(true);
     } finally {
       clearInterval(interval);
       setProgress(100);
@@ -140,41 +162,16 @@ const toggleExpand = (id: string) => {
     }
   };
 
-  // ---------------------------------
-  // AZURE TRANSCRIPTION WITH MANUAL RETRY
-  // ---------------------------------
-  const handleAzureSubmit = async () => {
-    if (isBlocked) return;
-    if (!validateInput()) return;
-
-    setLoading(true);
-    setProgress(0);
-
-    const interval = setInterval(() =>
-      setProgress((p) => Math.min(p + 10, 90)), 200);
-
-    try {
-      await postAzureTranscription(audioUrl);
-      setRetryCount(0);
-    } catch {
-      setError("Azure transcription failed.");
-
-      const newCount = retryCount + 1;
-      setRetryCount(newCount);
-
-      if (newCount >= 3) {
-        setIsBlocked(true);
-      }
-    } finally {
-      clearInterval(interval);
-      setProgress(100);
-      setTimeout(() => setLoading(false), 300);
-      setAudioUrl("");
-      fetchRecent();
-    }
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    handleTranscription(false);
   };
 
-  // AUTO ERROR CLEAR
+  const handleAzureSubmit = () => handleTranscription(true);
+
+  // ---------------------------------
+  // AUTO CLEAR ERROR / SUCCESS
+  // ---------------------------------
   useEffect(() => {
     if (error) {
       const timer = setTimeout(() => setError(null), 3000);
@@ -182,8 +179,15 @@ const toggleExpand = (id: string) => {
     }
   }, [error]);
 
+  useEffect(() => {
+    if (success) {
+      const timer = setTimeout(() => setSuccess(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [success]);
+
   // ---------------------------------
-  // SEARCH, SORT, PAGINATION (UNCHANGED)
+  // SEARCH, SORT, PAGINATION
   // ---------------------------------
   const filtered = useMemo(() => {
     return transcriptions.filter(
@@ -195,7 +199,6 @@ const toggleExpand = (id: string) => {
 
   const sorted = useMemo(() => {
     const arr = [...filtered];
-
     switch (sort) {
       case "oldest":
         return arr.sort((a, b) => +new Date(a.createdAt) - +new Date(b.createdAt));
@@ -215,20 +218,31 @@ const toggleExpand = (id: string) => {
     if (p >= 1 && p <= totalPages) setPage(p);
   };
 
+  // ---------------------------------
+  // RENDER
+  // ---------------------------------
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col items-center p-6">
-      <h2 className="text-3xl font-bold mb-6 text-purple-700">🎤 Transcription App</h2>
+      <h2 className="text-3xl font-bold mb-6 text-purple-700">🎤 Transcription Services</h2>
 
       {isBlocked && (
         <p className="text-red-600 mb-4 font-semibold">
-          ❌ Retry limit reached. Try again in  
-          <b> {Math.floor(blockTime / 60)}:{("0" + (blockTime % 60)).slice(-2)}</b>
+          Retry limit reached. Try again in{" "}
+          <b>
+            {Math.floor(blockTime / 60)}:{("0" + (blockTime % 60)).slice(-2)}
+          </b>
         </p>
       )}
 
       {error && (
         <div className="bg-red-200 text-red-700 px-4 py-3 rounded-lg mb-4 w-full max-w-2xl">
           {error}
+        </div>
+      )}
+
+      {success && (
+        <div className="bg-green-200 text-green-700 px-4 py-3 rounded-lg mb-4 w-full max-w-2xl">
+          {success}
         </div>
       )}
 
@@ -262,6 +276,15 @@ const toggleExpand = (id: string) => {
           Azure Transcribe
         </button>
       </form>
+
+      {retryCount > 0 && retryCount < 3 && !isBlocked && (
+        <button
+          onClick={() => handleTranscription(false)}
+          className="bg-yellow-500 text-white px-4 py-2 rounded-lg mb-4"
+        >
+          Retry Transcription ({3 - retryCount} remaining)
+        </button>
+      )}
 
       {/* ----------------- PROGRESS BAR ----------------- */}
       {loading && (
@@ -312,24 +335,41 @@ const toggleExpand = (id: string) => {
             </p>
             <p className="font-medium">{t.audioUrl}</p>
             <div className="mt-2">
-  <p className="whitespace-pre-wrap">
-    {expanded[t._id]
-      ? t.transcription
-      : t.transcription.length > 150
-        ? t.transcription.slice(0, 150) + "..."
-        : t.transcription}
-  </p>
+              <p className="whitespace-pre-wrap">
+                {expanded[t._id]
+                  ? t.transcription
+                  : t.transcription.length > 150
+                  ? t.transcription.slice(0, 150) + "..."
+                  : t.transcription}
+              </p>
 
-  {/* Read More / Read Less button */}
-  {t.transcription.length > 150 && (
-    <button
-      onClick={() => toggleExpand(t._id)}
-      className="text-blue-600 underline text-sm mt-1"
-    >
-      {expanded[t._id] ? "Read less" : "Read more"}
-    </button>
-  )}
-</div>
+              {/* Read More / Read Less */}
+              {t.transcription.length > 150 && (
+                <button
+                  onClick={() => toggleExpand(t._id)}
+                  className="text-blue-600 underline text-sm mt-1"
+                >
+                  {expanded[t._id] ? "Read less" : "Read more"}
+                </button>
+              )}
+
+              {/* Download Buttons */}
+              <div className="flex gap-2 mt-2">
+                <button
+                  onClick={() => downloadAudio(t.audioUrl)}
+                  className="bg-purple-500 text-white px-3 py-1 rounded"
+                >
+                  Download Audio
+                </button>
+
+                <button
+                  onClick={() => downloadText(t.transcription, `${t._id}.txt`)}
+                  className="bg-green-500 text-white px-3 py-1 rounded"
+                >
+                  Download Transcription
+                </button>
+              </div>
+            </div>
 
             <span className="inline-block mt-2 text-xs bg-purple-100 px-2 py-1 rounded-full">
               {t.language || "en-US"}
